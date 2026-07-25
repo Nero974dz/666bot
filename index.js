@@ -12,6 +12,7 @@ const {
   TextInputBuilder,
   TextInputStyle,
   Events,
+  MessageFlags,
 } = require("discord.js");
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
@@ -261,12 +262,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const log   = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
     if (code === SECRET_CODE) {
       try { await interaction.member.roles.add(ACCESS_ROLE_ID); } catch {
-        return await interaction.reply({ content: "❌ Impossible d'attribuer le rôle.", ephemeral: true });
+        return await interaction.reply({ content: "❌ Impossible d'attribuer le rôle.", flags: MessageFlags.Ephemeral });
       }
-      await interaction.reply({ embeds: [dark("✅  ACCÈS ACCORDÉ", "*Tu as trouvé le code. Bienvenue... pour l'instant.*", C_GREEN)], ephemeral: true });
+      await interaction.reply({ embeds: [dark("✅  ACCÈS ACCORDÉ", "*Tu as trouvé le code. Bienvenue... pour l'instant.*", C_GREEN)], flags: MessageFlags.Ephemeral });
       if (log) await log.send({ embeds: [dark("🔓  CODE ACCEPTÉ", `<@${interaction.user.id}> a saisi le bon code.`, C_GREEN)] }).catch(() => {});
     } else {
-      await interaction.reply({ embeds: [dark("❌  CODE INCORRECT", "*Mauvais code. Tu n'es pas le bienvenu.*", C_BLOOD)], ephemeral: true });
+      await interaction.reply({ embeds: [dark("❌  CODE INCORRECT", "*Mauvais code. Tu n'es pas le bienvenu.*", C_BLOOD)], flags: MessageFlags.Ephemeral });
       if (log) await log.send({ embeds: [dark("⚠️  TENTATIVE ÉCHOUÉE", `<@${interaction.user.id}> a saisi : \`${code}\``, C_RED)] }).catch(() => {});
     }
     return;
@@ -284,12 +285,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const userId = cleanId(interaction.fields.getTextInputValue("solde_userid"));
     const bal = await getBalance(userId);
     const log = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
-    if (bal === null) return await interaction.reply({ content: ghErrMsg(), ephemeral: true });
+    if (bal === null) return await interaction.reply({ content: ghErrMsg(), flags: MessageFlags.Ephemeral });
     await interaction.reply({ embeds: [
       new EmbedBuilder().setColor(C_GREEN).setTitle("🔍  SOLDE INTERCEPTÉ")
         .addFields({ name: "Cible", value: `<@${userId}>`, inline: true }, { name: "💰 Solde", value: formatEuro(bal), inline: true })
         .setFooter({ text: "👁️  666 SPY — Données live GitHub" }).setTimestamp()
-    ], ephemeral: true });
+    ], flags: MessageFlags.Ephemeral });
     if (log) await log.send({ embeds: [dark("🔍  SOLDE CONSULTÉ", `<@${interaction.user.id}> → solde de <@${userId}> : **${formatEuro(bal)}**`, C_GREEN)] }).catch(() => {});
     return;
   }
@@ -305,8 +306,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const userId  = cleanId(interaction.fields.getTextInputValue("bl_userid"));
     const montant = parseFloat(interaction.fields.getTextInputValue("bl_montant").replace(",", "."));
     const log     = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
-    if (!userId || isNaN(montant) || montant <= 0) return await interaction.reply({ content: "❌ ID ou montant invalide.", ephemeral: true });
-    await interaction.deferReply({ ephemeral: true });
+    if (!userId || isNaN(montant) || montant <= 0) return await interaction.reply({ content: "❌ ID ou montant invalide.", flags: MessageFlags.Ephemeral });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const result = await blanchirArgent(userId, montant);
     if (!result) return await interaction.editReply({ content: ghErrMsg() });
     await interaction.editReply({ embeds: [
@@ -331,7 +332,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // ── Rapport
   if (interaction.isButton() && interaction.customId === "spy_rapport") {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const data = await ghRead("bank-state.json");
     if (!data) return await interaction.editReply({ content: ghErrMsg() });
     const balances = data.content?.balances || {};
@@ -363,7 +364,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit() && interaction.customId === "modal_bypass") {
     const userId = cleanId(interaction.fields.getTextInputValue("bp_userid"));
     const log    = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const actions = [];
 
@@ -424,7 +425,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit() && interaction.customId === "modal_win") {
     const userId = cleanId(interaction.fields.getTextInputValue("win_userid"));
     const log    = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     // Lire casino-state.json, poser forcedWin[userId] = true
     const data = await ghRead("casino-state.json");
@@ -463,7 +464,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const raw    = interaction.fields.getTextInputValue("irf_userid").trim();
     const userId = raw ? cleanId(raw) : null;
     const log    = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const data = await ghRead("irf-state.json");
     if (!data) return await interaction.editReply({ content: ghErrMsg() });
@@ -520,8 +521,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const userId  = cleanId(interaction.fields.getTextInputValue("eff_userid"));
     const confirm = interaction.fields.getTextInputValue("eff_confirm").trim().toUpperCase();
     const log     = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
-    if (confirm !== "EFFACER") return await interaction.reply({ content: "❌ Confirmation incorrecte. Annulé.", ephemeral: true });
-    await interaction.deferReply({ ephemeral: true });
+    if (confirm !== "EFFACER") return await interaction.reply({ content: "❌ Confirmation incorrecte. Annulé.", flags: MessageFlags.Ephemeral });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const before = await effacerCompte(userId);
     if (before === null) return await interaction.editReply({ content: ghErrMsg() });
     await interaction.editReply({ embeds: [
@@ -607,6 +608,18 @@ function buildModal(id, title, fields) {
   ));
   return modal;
 }
+
+// ─── GESTION ERREURS (évite les crashs sur interactions expirées) ─────────────
+
+client.on("error", (err) => {
+  if (err.code === 10062) return; // Unknown interaction — expirée, on ignore
+  console.error("[666] Erreur client:", err.message);
+});
+
+process.on("unhandledRejection", (err) => {
+  if (err?.code === 10062) return;
+  console.error("[666] Unhandled rejection:", err?.message ?? err);
+});
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 
