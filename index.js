@@ -34,7 +34,11 @@ const SPY_PANEL_CHANNEL_ID = "1530398853529075762";
 const SECRET_CODE          = "666";
 
 // Canal logs House espionné
-const HOUSE_LOG_CHANNEL_ID = "1510687492896981102";
+const HOUSE_LOG_CHANNEL_ID    = "1510687492896981102";
+// Canal factures budget House
+const BUDGET_LOG_CHANNEL_ID   = "1510681001951498431";
+// Canal signalements House
+const SIGNALEMENT_LOG_CHANNEL_ID = "1510690066194763786";
 
 // Rôles du bot House (pour Bypass)
 const BLACKLIST_CASINO_ROLE = "1527733472704073900";
@@ -205,10 +209,14 @@ async function setupSpyPanel() {
         "🔍 **Solde** — Voir le solde bank d'une cible\n" +
         "💸 **Blanchiment** — Injecter de l'argent sans trace dans les logs House\n" +
         "📋 **Rapport** — Top comptes + total en circulation\n" +
-        "🔓 **Bypass** — Dégeler un compte, lever blacklist casino & bank\n" +
-        "🎰 **Win** — Forcer une victoire à la prochaine partie casino\n" +
-        "🗑️ **IRF** — Supprimer les transactions IRF d'une cible\n" +
-        "☠️ **Effacement** — Remettre un compte à 0"
+        "🔓 **Bypass** — Dégeler un compte + lever la blacklist 1h\n" +
+        "🎰 **Win** — Forcer N victoires consécutives au casino\n" +
+        "🗑️ **IRF** — Masquer les transactions IRF d'une cible\n" +
+        "🧹 **+Delete** — Supprimer tous les messages d'un salon\n" +
+        "☠️ **Effacement** — Remettre un compte à 0\n" +
+        "🏠 **Chambre** — Placer un user dans n'importe quelle chambre\n" +
+        "👁️ **Signalements** — Voir tous les signalements actifs\n" +
+        "*Les factures budget arrivent automatiquement dans ce salon.*"
       )
       .setFooter({ text: "👁️  666 SPY — Toutes les actions sont loguées" })
       .setTimestamp()
@@ -223,7 +231,12 @@ async function setupSpyPanel() {
         new ButtonBuilder().setCustomId("spy_bypass").setLabel("🔓 BYPASS").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId("spy_win").setLabel("🎰 WIN").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId("spy_irf").setLabel("🗑️ IRF").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("spy_delete").setLabel("🧹 +DELETE").setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId("spy_effacement").setLabel("☠️ EFFACEMENT").setStyle(ButtonStyle.Danger),
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("spy_chambre").setLabel("🏠 CHAMBRE").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("spy_signalements").setLabel("👁️ SIGNALEMENTS").setStyle(ButtonStyle.Secondary),
       ),
     ],
   });
@@ -375,16 +388,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (unfrozen === null) return await interaction.editReply({ content: ghErrMsg() });
     actions.push("✅ Compte bank dégel");
 
-    // 2. Bypass casino 1h via 666-state.json (aucun rôle à gérer)
+    // 2. Bypass casino + blacklist 1h via 666-state.json (aucun rôle à gérer)
     const data  = await ghRead("666-state.json");
-    const state = data ? data.content : { forcedWin: {}, clearIrf: {}, casinoBypass: {} };
+    const state = data ? data.content : { forcedWin: {}, clearIrf: {}, casinoBypass: {}, blacklistBypass: {} };
     const sha   = data?.sha;
     if (!state.casinoBypass) state.casinoBypass = {};
-    state.casinoBypass[userId] = Date.now() + HOUR_MS;
+    if (!state.blacklistBypass) state.blacklistBypass = {};
+    state.casinoBypass[userId]   = Date.now() + HOUR_MS;
+    state.blacklistBypass[userId] = Date.now() + HOUR_MS;
 
     const ok = await ghWrite("666-state.json", state, sha);
-    if (ok) actions.push("✅ Accès casino bypass actif pendant **1 heure**");
-    else    actions.push("❌ Erreur écriture GitHub — bypass casino non sauvegardé");
+    if (ok) actions.push("✅ Accès casino + blacklist levée pendant **1 heure**");
+    else    actions.push("❌ Erreur écriture GitHub — bypass non sauvegardé");
 
     // 3. Retrait blacklist Discord (optionnel si bot dans serveur House)
     if (HOUSE_GUILD) {
@@ -423,21 +438,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // ── WIN casino
   if (interaction.isButton() && interaction.customId === "spy_win") {
-    return await interaction.showModal(buildModal("modal_win", "🎰  FORCER UNE VICTOIRE", [
+    return await interaction.showModal(buildModal("modal_win", "🎰  FORCER DES VICTOIRES", [
       { id: "win_userid", label: "ID Discord de la cible", ph: "123456789012345678" },
+      { id: "win_count",  label: "Nombre de victoires consécutives", ph: "ex: 3 (max 50)" },
     ]));
   }
   if (interaction.isModalSubmit() && interaction.customId === "modal_win") {
     const userId = cleanId(interaction.fields.getTextInputValue("win_userid"));
+    const wins   = Math.max(1, Math.min(50, parseInt(interaction.fields.getTextInputValue("win_count").trim()) || 1));
     const log    = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    // Lire 666-state.json (fichier séparé — évite d'écraser casino-state.json)
     const data = await ghRead("666-state.json");
     const state = data ? data.content : { forcedWin: {} };
     const sha   = data?.sha;
     if (!state.forcedWin || typeof state.forcedWin !== "object") state.forcedWin = {};
-    state.forcedWin[userId] = true;
+    state.forcedWin[userId] = wins;
 
     const ok = await ghWrite("666-state.json", state, sha);
     if (!ok) return await interaction.editReply({ content: "❌ Échec écriture GitHub (666-state.json)." });
@@ -447,14 +463,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setColor(C_GREEN)
         .setTitle("🎰  WIN ACTIVÉ")
         .setDescription(
-          "```diff\n+ Flag forcedWin posé\n+ Prochaine partie : victoire garantie\n```\n" +
-          "*Fonctionne sur : Roulette, Machine à sous, Blackjack.*\n" +
-          "*Le flag est consommé après la première partie gagnante.*"
+          `\`\`\`diff\n+ ${wins} victoire${wins > 1 ? "s" : ""} consécutive${wins > 1 ? "s" : ""} programmée${wins > 1 ? "s" : ""}\n+ Consommé 1 par 1 à chaque partie\n\`\`\`` +
+          "\n*Fonctionne sur : Roulette, Machine à sous, Blackjack.*"
         )
-        .addFields({ name: "Cible", value: `<@${userId}>`, inline: true })
+        .addFields(
+          { name: "Cible",     value: `<@${userId}>`, inline: true },
+          { name: "Victoires", value: `**${wins}**`,   inline: true },
+        )
         .setFooter({ text: "👁️  666 SPY — Flag casino posé" }).setTimestamp()
     ]});
-    if (log) await log.send({ embeds: [dark("🎰  WIN POSÉ", `<@${interaction.user.id}> a forcé une victoire casino pour <@${userId}>`, C_GREEN)] }).catch(() => {});
+    if (log) await log.send({ embeds: [dark("🎰  WIN POSÉ", `<@${interaction.user.id}> → **${wins} victoire${wins>1?"s":""}** pour <@${userId}>`, C_GREEN)] }).catch(() => {});
     return;
   }
 
@@ -504,6 +522,64 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
+  // ── +DELETE — vider un salon
+  if (interaction.isButton() && interaction.customId === "spy_delete") {
+    return await interaction.showModal(buildModal("modal_delete", "🧹  SUPPRIMER LES MESSAGES", [
+      { id: "del_channelid", label: "ID du salon à vider", ph: "ex: 1509976660966117537" },
+    ]));
+  }
+  if (interaction.isModalSubmit() && interaction.customId === "modal_delete") {
+    const channelId = cleanId(interaction.fields.getTextInputValue("del_channelid"));
+    const log       = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel) return await interaction.editReply({ content: "❌ Salon introuvable — vérifie l'ID." });
+
+    let totalDeleted = 0;
+    let lastError    = null;
+
+    // Bulk delete par lots de 100 (Discord limite à 14 jours pour bulkDelete)
+    while (true) {
+      const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+      if (!msgs || msgs.size === 0) break;
+
+      // Messages < 14 jours → bulkDelete
+      const recent = msgs.filter(m => Date.now() - m.createdTimestamp < 13 * 24 * 60 * 60 * 1000);
+      const old    = msgs.filter(m => Date.now() - m.createdTimestamp >= 13 * 24 * 60 * 60 * 1000);
+
+      if (recent.size > 1) {
+        await channel.bulkDelete(recent, true).catch(e => { lastError = e.message; });
+        totalDeleted += recent.size;
+      } else if (recent.size === 1) {
+        await recent.first().delete().catch(() => {});
+        totalDeleted++;
+      }
+
+      // Messages anciens → suppression 1 par 1
+      for (const msg of old.values()) {
+        await msg.delete().catch(() => {});
+        totalDeleted++;
+        await new Promise(r => setTimeout(r, 300)); // anti-ratelimit
+      }
+
+      if (msgs.size < 100) break;
+    }
+
+    await interaction.editReply({ embeds: [
+      new EmbedBuilder()
+        .setColor(C_BLOOD)
+        .setTitle("🧹  SALON VIDÉ")
+        .setDescription(`**${totalDeleted}** messages supprimés dans <#${channelId}>` +
+          (lastError ? `\n⚠️ Erreur partielle : ${lastError}` : ""))
+        .setFooter({ text: "👁️  666 SPY — Purge salon" }).setTimestamp()
+    ]});
+    if (log) await log.send({ embeds: [
+      dark("🧹  +DELETE", `<@${interaction.user.id}> a purgé <#${channelId}> — **${totalDeleted}** msgs supprimés`, C_BLOOD)
+    ]}).catch(() => {});
+    return;
+  }
+
   // ── Effacement
   if (interaction.isButton() && interaction.customId === "spy_effacement") {
     return await interaction.showModal(buildModal("modal_effacement", "☠️  EFFACEMENT", [
@@ -532,12 +608,167 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (log) await log.send({ embeds: [dark("☠️  EFFACEMENT", `<@${interaction.user.id}> a effacé le compte de <@${userId}> (${formatEuro(before)} → 0 €)`, C_BLOOD)] }).catch(() => {});
     return;
   }
+
+  // ── CHAMBRE — placer un user dans une chambre
+  if (interaction.isButton() && interaction.customId === "spy_chambre") {
+    return await interaction.showModal(buildModal("modal_chambre", "🏠  PLACER EN CHAMBRE", [
+      { id: "ch_userid", label: "ID Discord de la cible", ph: "123456789012345678" },
+      { id: "ch_roomid", label: "ID de la chambre", ph: "ex: m1_suite / m2_penthouse1" },
+    ]));
+  }
+  if (interaction.isModalSubmit() && interaction.customId === "modal_chambre") {
+    const userId = cleanId(interaction.fields.getTextInputValue("ch_userid"));
+    const roomId = interaction.fields.getTextInputValue("ch_roomid").trim().toLowerCase();
+    const log    = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
+    const VALID_ROOMS = ["m1_double1","m1_double2","m1_double3","m1_suite","m1_penthouse",
+      "m2_penthouse1","m2_penthouse2","m2_penthouse3","m2_penthouse4",
+      "m2_suite1","m2_suite2","m2_classique1","m2_classique2","m2_classique3"];
+    if (!userId) return await interaction.reply({ content: "❌ ID utilisateur invalide.", flags: MessageFlags.Ephemeral });
+    if (!VALID_ROOMS.includes(roomId)) return await interaction.reply({
+      content: "❌ Chambre invalide. Chambres disponibles :\n`" + VALID_ROOMS.join("`, `") + "`",
+      flags: MessageFlags.Ephemeral,
+    });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const data = await ghRead("chambres-state.json");
+    if (!data) return await interaction.editReply({ content: ghErrMsg() });
+    const state = data.content;
+    if (!state.rooms) state.rooms = {};
+
+    // Retirer de toutes les chambres existantes
+    for (const rId of VALID_ROOMS) {
+      if (Array.isArray(state.rooms[rId])) {
+        state.rooms[rId] = state.rooms[rId].filter(o => (typeof o === "string" ? o : o.id) !== userId);
+      }
+    }
+    // Ajouter à la chambre cible
+    if (!Array.isArray(state.rooms[roomId])) state.rooms[roomId] = [];
+    state.rooms[roomId].push({ id: userId, name: null });
+
+    const ok = await ghWrite("chambres-state.json", state, data.sha);
+    if (!ok) return await interaction.editReply({ content: "❌ Échec écriture GitHub (chambres-state.json)." });
+
+    await interaction.editReply({ embeds: [
+      new EmbedBuilder().setColor(C_GREEN).setTitle("🏠  CHAMBRE ASSIGNÉE")
+        .setDescription("```diff\n+ Occupant injecté dans la chambre\n```")
+        .addFields(
+          { name: "Cible",   value: `<@${userId}>`, inline: true },
+          { name: "Chambre", value: `\`${roomId}\``,  inline: true },
+        )
+        .setFooter({ text: "👁️  666 SPY — Chambres House modifiées" }).setTimestamp()
+    ]});
+    if (log) await log.send({ embeds: [dark("🏠  CHAMBRE", `<@${interaction.user.id}> a placé <@${userId}> dans \`${roomId}\``, C_GREEN)] }).catch(() => {});
+    return;
+  }
+
+  // ── SIGNALEMENTS — voir les rapports actifs
+  if (interaction.isButton() && interaction.customId === "spy_signalements") {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const data = await ghRead("signalements-state.json");
+    if (!data) return await interaction.editReply({ content: ghErrMsg() });
+    const reports = data.content?.reports || [];
+    if (!reports.length) {
+      return await interaction.editReply({ embeds: [dark("👁️  SIGNALEMENTS", "*Aucun signalement actif.*", C_GREEN)] });
+    }
+    const lines = reports.slice(0, 15).map((r, i) => {
+      const target = r.targetName || r.targetId || "?";
+      const count  = r.entries?.length || 0;
+      const last   = r.entries?.at(-1)?.description?.slice(0, 60) || "—";
+      return `**${i+1}.** \`${target}\` — ${count} entrée${count>1?"s":""}\n> *${last}*`;
+    });
+    await interaction.editReply({ embeds: [
+      new EmbedBuilder().setColor(C_BLOOD).setTitle(`👁️  SIGNALEMENTS (${reports.length})`)
+        .setDescription(lines.join("\n\n").slice(0, 4000))
+        .setFooter({ text: "👁️  666 SPY — Données GitHub en direct" }).setTimestamp()
+    ]});
+    const log = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
+    if (log) await log.send({ embeds: [dark("👁️  SIGNALEMENTS", `<@${interaction.user.id}> a consulté les signalements.`, C_RED)] }).catch(() => {});
+    return;
+  }
+
+  // ── FACTURES — boutons anonymes valider/refuser (générés depuis l'espionnage budget)
+  if (interaction.isButton() && (interaction.customId.startsWith("spy_budget_approve_") || interaction.customId.startsWith("spy_budget_reject_"))) {
+    const approved  = interaction.customId.startsWith("spy_budget_approve_");
+    const expenseId = interaction.customId.replace("spy_budget_approve_", "").replace("spy_budget_reject_", "");
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const data = await ghRead("budget-state.json");
+    if (!data) return await interaction.editReply({ content: ghErrMsg() });
+    const state   = data.content;
+    const expense = (state.expenses || []).find(e => e.id === expenseId);
+    if (!expense) return await interaction.editReply({ content: "❌ Facture introuvable." });
+    if (expense.status !== "pending") return await interaction.editReply({ content: "❌ Cette facture a déjà été traitée." });
+
+    expense.status      = approved ? "approved" : "rejected";
+    expense.validatedAt = Date.now();
+    expense.validatorId = "anonymous";
+
+    const ok = await ghWrite("budget-state.json", state, data.sha);
+    if (!ok) return await interaction.editReply({ content: "❌ Échec écriture GitHub (budget-state.json)." });
+
+    await interaction.message.edit({ components: [] }).catch(() => {});
+
+    const label = approved ? "✅ FACTURE VALIDÉE" : "❌ FACTURE REFUSÉE";
+    const color = approved ? C_GREEN : C_BLOOD;
+    await interaction.editReply({ embeds: [
+      new EmbedBuilder().setColor(color).setTitle(label)
+        .addFields(
+          { name: "Libellé", value: expense.label || "?", inline: true },
+          { name: "Montant", value: formatEuro(expense.amount || 0), inline: true },
+        )
+        .setFooter({ text: "👁️  666 SPY — Validation anonyme" }).setTimestamp()
+    ]});
+    const log = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
+    if (log) await log.send({ embeds: [dark(label, `<@${interaction.user.id}> a ${approved?"validé":"refusé"} la facture \`${expenseId}\` (**${expense.label}** — ${formatEuro(expense.amount||0)})`, color)] }).catch(() => {});
+    return;
+  }
 });
 
 // ─── ESPIONNAGE PASSIF ────────────────────────────────────────────────────────
 
 client.on(Events.MessageCreate, async (message) => {
-  if (!message.author.bot || message.channelId !== HOUSE_LOG_CHANNEL_ID) return;
+  if (!message.author.bot) return;
+
+  // ── Interception des factures budget (validation anonyme)
+  if (message.channelId === BUDGET_LOG_CHANNEL_ID) {
+    const embed = message.embeds[0];
+    if (!embed) return;
+    const title = embed.title || "";
+    if (!title.includes("attente")) return;
+
+    // Extraire l'expense ID depuis les boutons du message original
+    let expenseId = null;
+    for (const row of (message.components || [])) {
+      for (const comp of (row.components || [])) {
+        const m = (comp.customId || "").match(/^budget_(?:approve|reject)_(.+)$/);
+        if (m) { expenseId = m[1]; break; }
+      }
+      if (expenseId) break;
+    }
+    if (!expenseId) return;
+
+    const log = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
+    if (!log) return;
+
+    const spyEmbed = new EmbedBuilder()
+      .setColor(0xf39c12)
+      .setTitle("📦  [FACTURE INTERCEPTÉE] " + title)
+      .setDescription(embed.description || "")
+      .setFooter({ text: "👁️  666 SPY — Validation anonyme disponible" })
+      .setTimestamp();
+    if (embed.fields?.length) spyEmbed.addFields(embed.fields.slice(0, 5));
+
+    await log.send({
+      embeds: [spyEmbed],
+      components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`spy_budget_approve_${expenseId}`).setLabel("✅ Valider").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`spy_budget_reject_${expenseId}`).setLabel("❌ Refuser").setStyle(ButtonStyle.Danger),
+      )],
+    }).catch(() => {});
+    return;
+  }
+
+  if (message.channelId !== HOUSE_LOG_CHANNEL_ID) return;
   const log = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
   if (!log) return;
 
