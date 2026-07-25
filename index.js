@@ -884,6 +884,30 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
+// ─── RÉPONSES DM ANONYMES ─────────────────────────────────────────────────────
+
+client.on(Events.MessageCreate, async (message) => {
+  if (message.author.bot) return;
+  if (message.guild) return; // ignorer les messages serveur
+
+  const log = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
+  if (!log) return;
+
+  await log.send({ embeds: [
+    new EmbedBuilder()
+      .setColor(C_GREEN)
+      .setTitle("📩  RÉPONSE À UN DM ANONYME")
+      .addFields(
+        { name: "Expéditeur", value: `<@${message.author.id}> (\`${message.author.tag}\`)`, inline: true },
+        { name: "Heure",      value: new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris" }), inline: true },
+        { name: "Message",    value: message.content?.slice(0, 1024) || "*(vide)*", inline: false },
+      )
+      .setThumbnail(message.author.displayAvatarURL())
+      .setFooter({ text: "👁️  666 SPY — Réponse DM interceptée" })
+      .setTimestamp()
+  ]}).catch(() => {});
+});
+
 // ─── UTILITAIRES ──────────────────────────────────────────────────────────────
 
 function dark(title, desc, color) {
