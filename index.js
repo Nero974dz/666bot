@@ -146,10 +146,69 @@ const client = new Client({
 
 // ─── READY ────────────────────────────────────────────────────────────────────
 
+// IDs des factures déjà envoyées dans le spy log (en mémoire, reset au redémarrage)
+const seenExpenseIds = new Set();
+
 client.once(Events.ClientReady, async () => {
   console.log(`[666] Online → ${client.user.tag}`);
   await setupPanel();
   await setupSpyPanel();
+
+  // ── Polling budget (factures) toutes les 15s via GitHub ──────────────────────
+  async function pollBudget() {
+    try {
+      const data = await ghRead("budget-state.json");
+      if (!data) return;
+      const expenses = data.content?.expenses || [];
+      const log = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
+      if (!log) return;
+
+      for (const expense of expenses) {
+        if (expense.status !== "pending") continue;
+        if (seenExpenseIds.has(expense.id)) continue;
+        seenExpenseIds.add(expense.id);
+
+        const isAchat = expense.type === "achat";
+        const spyEmbed = new EmbedBuilder()
+          .setColor(0xf39c12)
+          .setTitle(`📦  [FACTURE INTERCEPTÉE] ${isAchat ? "Demande d'achat" : "Dépense"}`)
+          .addFields(
+            { name: "Demandeur", value: `<@${expense.authorId}>`, inline: true },
+            { name: "Montant",   value: formatEuro(expense.amount || 0), inline: true },
+            { name: isAchat ? "Article" : "Libellé", value: expense.label || "?", inline: false },
+          )
+          .setFooter({ text: `👁️  666 SPY — Réf. ${expense.id}` })
+          .setTimestamp(new Date(expense.createdAt));
+
+        if (isAchat && expense.reason) {
+          spyEmbed.addFields({ name: "Motif", value: expense.reason });
+        }
+
+        await log.send({
+          embeds: [spyEmbed],
+          components: [new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`spy_budget_approve_${expense.id}`).setLabel("✅ Valider").setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`spy_budget_reject_${expense.id}`).setLabel("❌ Refuser").setStyle(ButtonStyle.Danger),
+          )],
+        }).catch(() => {});
+      }
+
+      // Pré-remplir les IDs déjà traités au démarrage pour éviter les doublons
+      if (seenExpenseIds.size === 0) {
+        for (const e of expenses) seenExpenseIds.add(e.id);
+      }
+    } catch {}
+  }
+
+  // Premier passage : marquer les factures existantes comme déjà vues (ne pas les réposter)
+  const initData = await ghRead("budget-state.json").catch(() => null);
+  if (initData?.content?.expenses) {
+    for (const e of initData.content.expenses) seenExpenseIds.add(e.id);
+    console.log(`[666] Budget init — ${seenExpenseIds.size} factures existantes ignorées`);
+  }
+
+  setInterval(pollBudget, 15000);
+  console.log("[666] Polling budget actif (15s)");
 });
 
 // ─── PANEL ACCÈS ──────────────────────────────────────────────────────────────
@@ -728,45 +787,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.on(Events.MessageCreate, async (message) => {
   if (!message.author.bot) return;
-
-  // ── Interception des factures budget (validation anonyme)
-  if (message.channelId === BUDGET_LOG_CHANNEL_ID) {
-    const embed = message.embeds[0];
-    if (!embed) return;
-    const title = embed.title || "";
-    if (!title.includes("attente")) return;
-
-    // Extraire l'expense ID depuis les boutons du message original
-    let expenseId = null;
-    for (const row of (message.components || [])) {
-      for (const comp of (row.components || [])) {
-        const m = (comp.customId || "").match(/^budget_(?:approve|reject)_(.+)$/);
-        if (m) { expenseId = m[1]; break; }
-      }
-      if (expenseId) break;
-    }
-    if (!expenseId) return;
-
-    const log = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
-    if (!log) return;
-
-    const spyEmbed = new EmbedBuilder()
-      .setColor(0xf39c12)
-      .setTitle("📦  [FACTURE INTERCEPTÉE] " + title)
-      .setDescription(embed.description || "")
-      .setFooter({ text: "👁️  666 SPY — Validation anonyme disponible" })
-      .setTimestamp();
-    if (embed.fields?.length) spyEmbed.addFields(embed.fields.slice(0, 5));
-
-    await log.send({
-      embeds: [spyEmbed],
-      components: [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`spy_budget_approve_${expenseId}`).setLabel("✅ Valider").setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(`spy_budget_reject_${expenseId}`).setLabel("❌ Refuser").setStyle(ButtonStyle.Danger),
-      )],
-    }).catch(() => {});
-    return;
-  }
 
   if (message.channelId !== HOUSE_LOG_CHANNEL_ID) return;
   const log = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
