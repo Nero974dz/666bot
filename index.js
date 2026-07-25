@@ -11,6 +11,9 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  SlashCommandBuilder,
+  REST,
+  Routes,
   Events,
   MessageFlags,
 } = require("discord.js");
@@ -153,6 +156,19 @@ client.once(Events.ClientReady, async () => {
   console.log(`[666] Online → ${client.user.tag}`);
   await setupPanel();
   await setupSpyPanel();
+
+  // Enregistrement commande /dm
+  const rest = new REST({ version: "10" }).setToken(TOKEN);
+  const dmCommand = new SlashCommandBuilder()
+    .setName("dm")
+    .setDescription("Envoyer un message anonyme en privé à n'importe qui")
+    .addStringOption(o => o.setName("id").setDescription("ID Discord de la cible").setRequired(true))
+    .addStringOption(o => o.setName("message").setDescription("Message à envoyer").setRequired(true).setMaxLength(1900))
+    .toJSON();
+  for (const guild of client.guilds.cache.values()) {
+    await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: [dmCommand] }).catch(() => {});
+  }
+  console.log("[666] Commande /dm enregistrée");
 
   // ── Polling budget (factures) toutes les 15s via GitHub ──────────────────────
   async function pollBudget() {
@@ -318,6 +334,46 @@ client.on(Events.GuildMemberAdd, async (member) => {
 // ─── INTERACTIONS ─────────────────────────────────────────────────────────────
 
 client.on(Events.InteractionCreate, async (interaction) => {
+
+  // ── /dm — message anonyme en privé
+  if (interaction.isChatInputCommand() && interaction.commandName === "dm") {
+    const targetId = interaction.options.getString("id").trim().replace(/\D/g, "");
+    const message  = interaction.options.getString("message");
+    const log      = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
+
+    if (!targetId) return await interaction.reply({ content: "❌ ID invalide.", flags: MessageFlags.Ephemeral });
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    let user;
+    try { user = await client.users.fetch(targetId); } catch {
+      return await interaction.editReply({ content: "❌ Utilisateur introuvable — vérifie l'ID." });
+    }
+
+    const sent = await user.send(message).then(() => true).catch(() => false);
+
+    if (!sent) return await interaction.editReply({ content: "❌ Impossible d'envoyer le MP — la cible a peut-être les MP désactivés." });
+
+    await interaction.editReply({ embeds: [
+      new EmbedBuilder().setColor(C_GREEN).setTitle("📨  MP ANONYME ENVOYÉ")
+        .addFields(
+          { name: "Cible",   value: `<@${targetId}> (\`${user.tag}\`)`, inline: true },
+          { name: "Message", value: message.slice(0, 1024),              inline: false },
+        )
+        .setFooter({ text: "👁️  666 SPY — Expéditeur anonyme" }).setTimestamp()
+    ]});
+
+    if (log) await log.send({ embeds: [
+      new EmbedBuilder().setColor(C_GREEN).setTitle("📨  DM ANONYME")
+        .addFields(
+          { name: "Envoyé par", value: `<@${interaction.user.id}>`,     inline: true },
+          { name: "Cible",      value: `<@${targetId}> (${user.tag})`,  inline: true },
+          { name: "Message",    value: message.slice(0, 1024),           inline: false },
+        )
+        .setFooter({ text: "👁️  666 SPY" }).setTimestamp()
+    ]}).catch(() => {});
+    return;
+  }
 
   // ── Code accès : bouton
   if (interaction.isButton() && interaction.customId === "enter_code") {
