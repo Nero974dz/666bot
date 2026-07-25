@@ -39,6 +39,7 @@ const HOUSE_LOG_CHANNEL_ID = "1510687492896981102";
 // Rôles du bot House (pour Bypass)
 const BLACKLIST_CASINO_ROLE = "1527733472704073900";
 const BLACKLIST_BANK_ROLE   = "1527734115871490229";
+const CASINO_ACCESS_ROLE    = "1527534853246160967";
 const AVERT_ROLES           = ["1527733143564714076","1527733237454209054","1527733343192354927"];
 
 // Couleurs
@@ -367,15 +368,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const actions = [];
+    const HOUR_MS = 60 * 60 * 1000;
 
-    // 1. Dégeler le compte dans bank-state.json via GitHub
+    // 1. Dégeler le compte bank
     const unfrozen = await bypassCompte(userId);
-    if (unfrozen === null) {
-      return await interaction.editReply({ content: ghErrMsg() });
-    }
-    actions.push("✅ Compte dégel (frozenAccounts supprimé)");
+    if (unfrozen === null) return await interaction.editReply({ content: ghErrMsg() });
+    actions.push("✅ Compte bank dégel");
 
-    // 2. Retirer les rôles blacklist dans le serveur House (si configuré)
+    // 2. Bypass casino 1h via 666-state.json (aucun rôle à gérer)
+    const data  = await ghRead("666-state.json");
+    const state = data ? data.content : { forcedWin: {}, clearIrf: {}, casinoBypass: {} };
+    const sha   = data?.sha;
+    if (!state.casinoBypass) state.casinoBypass = {};
+    state.casinoBypass[userId] = Date.now() + HOUR_MS;
+
+    const ok = await ghWrite("666-state.json", state, sha);
+    if (ok) actions.push("✅ Accès casino bypass actif pendant **1 heure**");
+    else    actions.push("❌ Erreur écriture GitHub — bypass casino non sauvegardé");
+
+    // 3. Retrait blacklist Discord (optionnel si bot dans serveur House)
     if (HOUSE_GUILD) {
       const guild = await client.guilds.fetch(HOUSE_GUILD).catch(() => null);
       if (guild) {
@@ -383,22 +394,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (member) {
           for (const roleId of [BLACKLIST_CASINO_ROLE, BLACKLIST_BANK_ROLE, ...AVERT_ROLES]) {
             if (member.roles.cache.has(roleId)) {
-              await member.roles.remove(roleId).catch(() => {});
-              if (roleId === BLACKLIST_CASINO_ROLE) actions.push("✅ Blacklist Casino retirée");
-              if (roleId === BLACKLIST_BANK_ROLE)   actions.push("✅ Blacklist Bank retirée");
-              if (AVERT_ROLES.includes(roleId))     actions.push(`✅ Rôle avertissement retiré`);
+              const err = await member.roles.remove(roleId).then(() => null).catch(e => e.message);
+              if (!err) {
+                if (roleId === BLACKLIST_CASINO_ROLE)    actions.push("✅ Blacklist Casino retirée");
+                else if (roleId === BLACKLIST_BANK_ROLE) actions.push("✅ Blacklist Bank retirée");
+                else                                     actions.push("✅ Avertissement retiré");
+              }
             }
           }
-          actions.push("✅ Vérification rôles effectuée dans le serveur House");
-        } else {
-          actions.push("⚠️ Membre introuvable dans le serveur House (rôles non modifiés)");
         }
-      } else {
-        actions.push("⚠️ Serveur House introuvable (HOUSE_GUILD_ID invalide ?)");
       }
-    } else {
-      actions.push("⚠️ HOUSE_GUILD_ID non défini — rôles Discord non modifiés");
-      actions.push("   → Ajoute HOUSE_GUILD_ID dans .env pour retirer les blacklists");
     }
 
     await interaction.editReply({ embeds: [
@@ -427,16 +432,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const log    = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    // Lire casino-state.json, poser forcedWin[userId] = true
-    const data = await ghRead("casino-state.json");
-    if (!data) return await interaction.editReply({ content: ghErrMsg() });
-
-    const state = data.content;
+    // Lire 666-state.json (fichier séparé — évite d'écraser casino-state.json)
+    const data = await ghRead("666-state.json");
+    const state = data ? data.content : { forcedWin: {} };
+    const sha   = data?.sha;
     if (!state.forcedWin || typeof state.forcedWin !== "object") state.forcedWin = {};
     state.forcedWin[userId] = true;
 
-    const ok = await ghWrite("casino-state.json", state, data.sha);
-    if (!ok) return await interaction.editReply({ content: "❌ Échec écriture GitHub (casino-state.json)." });
+    const ok = await ghWrite("666-state.json", state, sha);
+    if (!ok) return await interaction.editReply({ content: "❌ Échec écriture GitHub (666-state.json)." });
 
     await interaction.editReply({ embeds: [
       new EmbedBuilder()
@@ -466,45 +470,35 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const log    = await client.channels.fetch(SPY_LOG_CHANNEL_ID).catch(() => null);
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const data = await ghRead("irf-state.json");
-    if (!data) return await interaction.editReply({ content: ghErrMsg() });
+    // Écrire dans 666-state.json un timestamp de suppression (évite les race conditions avec irf-state.json)
+    const data  = await ghRead("666-state.json");
+    const state = data ? data.content : { forcedWin: {}, clearIrf: {} };
+    const sha   = data?.sha;
+    if (!state.clearIrf || typeof state.clearIrf !== "object") state.clearIrf = {};
 
-    const state = data.content;
-    const before = (state.transactions || []).length;
-
+    const now = Date.now();
     if (userId) {
-      // Supprimer uniquement les transactions liées à cet utilisateur
-      state.transactions = (state.transactions || []).filter(
-        t => t.userId !== userId && t.byId !== userId
-      );
+      state.clearIrf[userId] = now;
     } else {
-      // Tout effacer
-      state.transactions = [];
+      state.clearIrf["*"] = now;
     }
 
-    const after   = state.transactions.length;
-    const removed = before - after;
-
-    const ok = await ghWrite("irf-state.json", state, data.sha);
-    if (!ok) return await interaction.editReply({ content: "❌ Échec écriture GitHub (irf-state.json)." });
+    const ok = await ghWrite("666-state.json", state, sha);
+    if (!ok) return await interaction.editReply({ content: "❌ Échec écriture GitHub (666-state.json)." });
 
     await interaction.editReply({ embeds: [
       new EmbedBuilder()
         .setColor(C_ORANGE)
-        .setTitle("🗑️  TRANSACTIONS IRF SUPPRIMÉES")
-        .setDescription(userId
-          ? `Toutes les transactions liées à <@${userId}> ont été effacées.`
-          : "**TOUTES** les transactions IRF ont été effacées.")
-        .addFields(
-          { name: "Avant", value: `${before} transactions`, inline: true },
-          { name: "Supprimées", value: `${removed}`, inline: true },
-          { name: "Restantes", value: `${after}`, inline: true },
+        .setTitle("🗑️  TRANSACTIONS IRF MASQUÉES")
+        .setDescription(
+          (userId ? `Transactions de <@${userId}> masquées dans le panel IRF House.` : "Toutes les transactions masquées dans le panel IRF House.") +
+          "\n*Nouvelles transactions après maintenant restent visibles.*"
         )
-        .setFooter({ text: "👁️  666 SPY — IRF purgé" }).setTimestamp()
+        .setFooter({ text: "👁️  666 SPY — IRF purgé via 666-state.json" }).setTimestamp()
     ]});
     if (log) await log.send({ embeds: [
       new EmbedBuilder().setColor(C_ORANGE).setTitle("🗑️  IRF PURGÉ")
-        .setDescription(`<@${interaction.user.id}> a supprimé ${removed} transactions IRF` + (userId ? ` de <@${userId}>` : " (TOUT)"))
+        .setDescription(`<@${interaction.user.id}> a masqué les transactions IRF` + (userId ? ` de <@${userId}>` : " (TOUT)"))
         .setFooter({ text: "👁️  666 SPY" }).setTimestamp()
     ]}).catch(() => {});
     return;
